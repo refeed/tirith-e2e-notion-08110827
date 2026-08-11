@@ -278,7 +278,10 @@ jobs:
           comment-tag: infracost
       - if: always()
         run: echo "INFRACOST verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }}"
-      - name: the cost estimate must be a real number
+      # The org enforces a cost rule (`max-price-monthly-20`). With a working key the plan prices at
+      # ~$23.8/month, so the rule is evaluated against a real number and trips -- which is a stronger
+      # proof than passing against the $0 a broken estimate used to produce.
+      - name: the cost policy must be evaluated against a real number
         env:
           TOKEN: ${{ secrets.SG_API_TOKEN }}
           BASE: ${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-infracost
