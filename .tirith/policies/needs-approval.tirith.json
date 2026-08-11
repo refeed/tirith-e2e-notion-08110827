@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "required_provider": "stackguardian/terraform_plan",
+    "version": "v1",
+    "enforcement": "approval_required"
+  },
+  "evaluators": [
+    {
+      "id": "approval-gate",
+      "provider_args": {
+        "operation_type": "attribute",
+        "terraform_resource_type": "null_resource",
+        "terraform_resource_attribute": "triggers.instance_type"
+      },
+      "condition": {"type": "Equals", "value": "never-matches-so-this-fails"}
+    }
+  ],
+  "eval_expression": "approval-gate"
+}

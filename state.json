@@ -1,0 +1,52 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.5.7",
+  "values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "null_resource.app",
+          "mode": "managed",
+          "type": "null_resource",
+          "name": "app",
+          "provider_name": "registry.terraform.io/hashicorp/null",
+          "values": {
+            "id": "123",
+            "triggers": {
+              "instance_type": "m5.24xlarge",
+              "password": "hunter2-state-secret"
+            }
+          },
+          "sensitive_values": {
+            "triggers": {
+              "password": true
+            }
+          }
+        }
+      ],
+      "child_modules": [
+        {
+          "address": "module.db",
+          "resources": [
+            {
+              "address": "module.db.null_resource.secret",
+              "mode": "managed",
+              "type": "null_resource",
+              "name": "secret",
+              "values": {
+                "triggers": {
+                  "token": "hunter2-nested-secret"
+                }
+              },
+              "sensitive_values": {
+                "triggers": {
+                  "token": true
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

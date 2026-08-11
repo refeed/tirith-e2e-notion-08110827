@@ -1,0 +1,127 @@
+name: policy
+on: pull_request
+permissions: { contents: read, pull-requests: write, checks: write }
+
+env:
+  SG_API_TOKEN: ${{ secrets.SG_API_TOKEN }}
+  SG_ORG: ${{ vars.SG_ORG }}
+  SG_API_URL: https://testapi.qa.stackguardian.io/api/v1
+  SG_DASH: https://dash.qa.stackguardian.io
+  # QA-only: the template lives under demo-org because the apikey cannot write to /stackguardian,
+  # which is where the built-in default points.
+  SG_STEP_TEMPLATE: /demo-org/tirith-iac-governance:1
+
+jobs:
+  # Case 1 — the ordinary plan run. Source uploaded by default, plan masked client-side, infracost
+  # generated, org policies evaluated, sticky comment written.
+  #
+  # Also the failing-policy case: the plan trips a policy, so the verdict is `failed` while the RUN
+  # must still reach COMPLETED. A policy violation is data, not a step failure.
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        with:
+          sg-api-url: ${{ env.SG_API_URL }}
+          sg-dashboard-url: ${{ env.SG_DASH }}
+          step-template-id: ${{ env.SG_STEP_TEMPLATE }}
+          workflow-id: e2e-ntn-plan
+          comment-tag: plan
+      - if: always()
+        run: echo "PLAN verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }} mode=${{ steps.tirith.outputs.mode }}"
+
+  # Case 2 — a BINARY plan. `plan-file` renders it through `terraform show -json` in memory, so no
+  # unmasked plan JSON is ever written to disk. This is the case a pre-baked plan.json cannot test.
+  plan-file:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - run: |
+          terraform init -no-color
+          terraform plan -out=tfplan.bin -no-color
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        with:
+          sg-api-url: ${{ env.SG_API_URL }}
+          sg-dashboard-url: ${{ env.SG_DASH }}
+          step-template-id: ${{ env.SG_STEP_TEMPLATE }}
+          plan-file: tfplan.bin
+          workflow-id: e2e-ntn-planfile
+          comment-tag: plan-file
+      - if: always()
+        run: echo "PLANFILE verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }}"
+      - name: the binary plan must still be on disk, and no plan JSON beside it
+        if: always()
+        run: |
+          test -f tfplan.bin || { echo "binary plan vanished"; exit 1; }
+          if ls *.json 2>/dev/null | grep -qv '^$'; then
+            echo "UNEXPECTED json in the working directory:"; ls *.json; exit 1
+          fi
+          echo "no plan JSON was written to disk"
+
+  # Case 3 — a state document. Routing is purely "no plan.json, so tfstate.json goes to the json
+  # provider"; there is no stored input kind to disagree with.
+  state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        with:
+          sg-api-url: ${{ env.SG_API_URL }}
+          sg-dashboard-url: ${{ env.SG_DASH }}
+          step-template-id: ${{ env.SG_STEP_TEMPLATE }}
+          input-kind: terraform_state
+          state-path: state.json
+          source-dir: ""
+          workflow-id: e2e-ntn-state
+          comment-tag: state
+      - if: always()
+        run: echo "STATE verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }}"
+
+  # Case 4 — the two-phase pipeline. Same workflow-id as the plan job, so the workflow already
+  # exists: exactly the shape where ensure_workflow returns 409 and updates nothing. A state document
+  # must still route correctly against a workflow the plan phase created.
+  two-phase:
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        with:
+          sg-api-url: ${{ env.SG_API_URL }}
+          sg-dashboard-url: ${{ env.SG_DASH }}
+          step-template-id: ${{ env.SG_STEP_TEMPLATE }}
+          input-kind: terraform_state
+          state-path: state.json
+          source-dir: ""
+          workflow-id: e2e-ntn-plan
+          comment-tag: two-phase
+      - if: always()
+        run: echo "TWOPHASE verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }}"
+
+  # Case 5 — credential-free local mode. Policies come from the repository; nothing leaves the
+  # runner. Coexists with the platform jobs on the same PR, with its own comment tag.
+  local:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        env:
+          SG_API_TOKEN: ""
+          SG_ORG: ""
+        with:
+          comment-tag: local
+      - if: always()
+        run: echo "LOCAL verdict=${{ steps.tirith.outputs.verdict }} mode=${{ steps.tirith.outputs.mode }}"
+      - name: local mode must report no run id
+        if: always()
+        run: |
+          test -z "${{ steps.tirith.outputs.wfrun-id }}" || { echo "local mode leaked a run id"; exit 1; }
+          echo "wfrun-id is unset, as documented"

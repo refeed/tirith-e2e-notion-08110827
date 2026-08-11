@@ -1,0 +1,57 @@
+name: must-fail
+on: pull_request
+permissions: { contents: read, pull-requests: write, checks: write }
+
+# The negative cases. Each one is EXPECTED to fail, so each runs with continue-on-error and the job
+# then asserts it really did fail. A job that simply went green here would prove nothing.
+jobs:
+  # "Nothing to evaluate is red." No credentials and no policies is a hard failure, not a skip --
+  # a check that gated nothing must not report green.
+  no-credentials-and-no-policies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: point policy-path at an empty directory
+        run: mkdir -p .no-policies-here
+      - id: tirith
+        continue-on-error: true
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        env:
+          SG_API_TOKEN: ""
+          SG_ORG: ""
+        with:
+          policy-path: .no-policies-here
+          comment-tag: no-policies
+      - name: it must have failed
+        run: |
+          echo "outcome=${{ steps.tirith.outcome }} verdict=${{ steps.tirith.outputs.verdict }}"
+          test "${{ steps.tirith.outcome }}" = "failure" || {
+            echo "a check with nothing to evaluate reported ${{ steps.tirith.outcome }} -- it must be red"
+            exit 1
+          }
+          echo "nothing to evaluate was red, as documented"
+
+  # `fail-on-error` governs policy VERDICTS, not tool health. A tool failure must stay red even with
+  # fail-on-error: false -- otherwise an outage is indistinguishable from a pass.
+  tool-failure-ignores-fail-on-error:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        continue-on-error: true
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        env:
+          SG_API_TOKEN: ""
+          SG_ORG: ""
+        with:
+          input-path: does-not-exist.json
+          fail-on-error: "false"
+          comment-tag: missing-input
+      - name: it must have failed anyway
+        run: |
+          echo "outcome=${{ steps.tirith.outcome }}"
+          test "${{ steps.tirith.outcome }}" = "failure" || {
+            echo "a tool failure was swallowed by fail-on-error -- that input governs verdicts only"
+            exit 1
+          }
+          echo "tool failure stayed red despite fail-on-error: false"

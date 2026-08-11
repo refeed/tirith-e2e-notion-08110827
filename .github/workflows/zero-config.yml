@@ -1,0 +1,25 @@
+name: zero-config
+on: pull_request
+permissions: { contents: read, pull-requests: write, checks: write }
+
+# Deliberately NO env: block at any level, and the step below has NO with: block.
+#
+# This is the release gate the docs claim: the action with nothing configured at all must find the
+# repository's policies, evaluate them, comment and set a check. If this file ever needs an input
+# added to keep working, the zero-config claim has regressed.
+jobs:
+  no-inputs-at-all:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+      - if: always()
+        run: echo "ZEROCONFIG verdict=${{ steps.tirith.outputs.verdict }} mode=${{ steps.tirith.outputs.mode }}"
+      - name: it must have run locally, and must have evaluated something
+        if: always()
+        run: |
+          test "${{ steps.tirith.outputs.mode }}" = "local" || { echo "expected local mode"; exit 1; }
+          echo "passed=${{ steps.tirith.outputs.passed }} failed=${{ steps.tirith.outputs.failed }} warned=${{ steps.tirith.outputs.warned }}"
+          total=$(( ${{ steps.tirith.outputs.passed }} + ${{ steps.tirith.outputs.failed }} + ${{ steps.tirith.outputs.warned }} ))
+          test "$total" -gt 0 || { echo "nothing was evaluated -- a green check that gated nothing"; exit 1; }

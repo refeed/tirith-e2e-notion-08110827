@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "required_provider": "stackguardian/terraform_plan",
+    "version": "v1",
+    "enforcement": "hard_mandatory"
+  },
+  "evaluators": [
+    {
+      "id": "no-huge",
+      "provider_args": {
+        "operation_type": "attribute",
+        "terraform_resource_type": "null_resource",
+        "terraform_resource_attribute": "triggers.instance_type"
+      },
+      "condition": {
+        "type": "NotEquals",
+        "value": "m5.24xlarge"
+      }
+    }
+  ],
+  "eval_expression": "no-huge"
+}
