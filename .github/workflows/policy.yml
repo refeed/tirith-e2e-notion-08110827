@@ -40,12 +40,20 @@ jobs:
         if: always()
         env:
           TOKEN: ${{ secrets.SG_API_TOKEN }}
+          RUN_ID: ${{ steps.tirith.outputs.wfrun-id }}
+          BASE: ${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-plan
         run: |
           set -euo pipefail
-          BUNDLE="tirith-bundle-$(git rev-parse --short=7 HEAD)-plan.tar.gz"
-          echo "fetching $BUNDLE"
+          # Resolve the bundle from the RUN rather than guessing its name. Under pull_request the
+          # workspace HEAD is the merge commit, not the head sha the action names the bundle after --
+          # and this is also the documented path a consumer walks: run -> bundlePath -> get_artifact.
+          BUNDLE=$(curl -sf -H "Authorization: apikey $TOKEN" "$BASE/wfruns/$RUN_ID/" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin)["msg"]; print([s for s in d["RuntimeParameters"]["wfStepsConfig"] if s["name"]=="evaluate-policies"][0]["wfStepInputData"]["data"]["bundlePath"])')
+          echo "run $RUN_ID evaluated bundle: $BUNDLE"
+          test -n "$BUNDLE" || { echo "the run names no bundle"; exit 1; }
+
           URL=$(curl -sf -H "Authorization: apikey $TOKEN" \
-            "${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-plan/get_artifact/?artifactPath=$BUNDLE" \
+            "$BASE/get_artifact/?artifactPath=$BUNDLE" \
             | python3 -c 'import json,sys; print((json.load(sys.stdin).get("data") or {}).get("signedUrl",""))')
           test -n "$URL" || { echo "no signed URL -- the bundle was not retained"; exit 1; }
           curl -sf "$URL" -o bundle.tar.gz
@@ -57,7 +65,7 @@ jobs:
           fi
           grep -q "__SG_REDACTED__" unpacked/plan.json || { echo "plan.json carries no redaction marker"; exit 1; }
           test -f unpacked/main.tf || { echo "the source was not packed"; exit 1; }
-          echo "no plaintext secret; plan.json masked; source present"
+          echo "OK: bundle retained, no plaintext secret, plan.json masked, source present"
 
   # Case 2 — a BINARY plan. `plan-file` renders it through `terraform show -json` in memory, so no
   # unmasked plan JSON is ever written to disk. This is the case a pre-baked plan.json cannot test.
