@@ -32,6 +32,33 @@ jobs:
       - if: always()
         run: echo "PLAN verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }} mode=${{ steps.tirith.outputs.mode }}"
 
+      # Masking, asserted against the bytes that actually left the runner rather than against a dict
+      # in a unit test. plan.json here is BOTH the policy input and a file in the source tree, so the
+      # masked copy must be at the archive root AND the unmasked original must not have been packed
+      # alongside it. That is the exact mistake the source walk exists to prevent.
+      - name: the uploaded bundle must carry no plaintext secret
+        if: always()
+        env:
+          TOKEN: ${{ secrets.SG_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          BUNDLE="tirith-bundle-$(git rev-parse --short=7 HEAD)-plan.tar.gz"
+          echo "fetching $BUNDLE"
+          URL=$(curl -sf -H "Authorization: apikey $TOKEN" \
+            "${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-plan/get_artifact/?artifactPath=$BUNDLE" \
+            | python3 -c 'import json,sys; print((json.load(sys.stdin).get("data") or {}).get("signedUrl",""))')
+          test -n "$URL" || { echo "no signed URL -- the bundle was not retained"; exit 1; }
+          curl -sf "$URL" -o bundle.tar.gz
+          mkdir -p unpacked && tar -xzf bundle.tar.gz -C unpacked
+          echo "--- bundle contents ---"; find unpacked -type f | sort
+
+          if grep -rq "hunter2-plan-secret" unpacked/; then
+            echo "PLAINTEXT SECRET IN THE BUNDLE:"; grep -rl "hunter2-plan-secret" unpacked/; exit 1
+          fi
+          grep -q "__SG_REDACTED__" unpacked/plan.json || { echo "plan.json carries no redaction marker"; exit 1; }
+          test -f unpacked/main.tf || { echo "the source was not packed"; exit 1; }
+          echo "no plaintext secret; plan.json masked; source present"
+
   # Case 2 — a BINARY plan. `plan-file` renders it through `terraform show -json` in memory, so no
   # unmasked plan JSON is ever written to disk. This is the case a pre-baked plan.json cannot test.
   plan-file:
@@ -54,14 +81,18 @@ jobs:
           comment-tag: plan-file
       - if: always()
         run: echo "PLANFILE verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }}"
-      - name: the binary plan must still be on disk, and no plan JSON beside it
+      - name: the rendered plan JSON must never have touched the disk
         if: always()
         run: |
           test -f tfplan.bin || { echo "binary plan vanished"; exit 1; }
-          if ls *.json 2>/dev/null | grep -qv '^$'; then
-            echo "UNEXPECTED json in the working directory:"; ls *.json; exit 1
-          fi
-          echo "no plan JSON was written to disk"
+          # plan.json and state.json are committed fixtures, so the check is that `plan-file`
+          # rendering produced no NEW json -- it goes through terraform show into memory.
+          for unexpected in tfplan.json plan-file.json tfplan.bin.json; do
+            test ! -f "$unexpected" || { echo "UNEXPECTED $unexpected written to disk"; exit 1; }
+          done
+          # And the committed plan.json must be byte-identical -- the run must not have overwritten it.
+          git diff --exit-code -- plan.json || { echo "plan.json was modified on disk"; exit 1; }
+          echo "no rendered plan JSON was written to disk"
 
   # Case 3 — a state document. Routing is purely "no plan.json, so tfstate.json goes to the json
   # provider"; there is no stored input kind to disagree with.
