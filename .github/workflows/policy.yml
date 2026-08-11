@@ -176,3 +176,89 @@ jobs:
         run: |
           test -z "${{ steps.tirith.outputs.wfrun-id }}" || { echo "local mode leaked a run id"; exit 1; }
           echo "wfrun-id is unset, as documented"
+
+  # Case 6 — defaults. `workflow-group` is omitted entirely, so the run must land in `default`; the
+  # run URL is the evidence, since that is what a user follows from the PR comment.
+  defaults:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        with:
+          sg-api-url: ${{ env.SG_API_URL }}
+          sg-dashboard-url: ${{ env.SG_DASH }}
+          step-template-id: ${{ env.SG_STEP_TEMPLATE }}
+          workflow-id: e2e-ntn-defaults
+          comment-tag: defaults
+      - if: always()
+        run: echo "DEFAULTS verdict=${{ steps.tirith.outputs.verdict }} url=${{ steps.tirith.outputs.wfrun-url }}"
+      - name: the run must be in the default workflow group
+        run: |
+          URL="${{ steps.tirith.outputs.wfrun-url }}"
+          echo "$URL"
+          case "$URL" in
+            */wfgrps/default/*) echo "landed in the default workflow group" ;;
+            *) echo "expected /wfgrps/default/ in the run URL"; exit 1 ;;
+          esac
+
+      # The step's stage name, which is what the dashboard shows and what every status key is built
+      # from. Renamed from `evaluate-policies` so the stage names the template that produced it.
+      - name: the run stage must be named after the step template
+        env:
+          TOKEN: ${{ secrets.SG_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          STAGES=$(curl -sf -H "Authorization: apikey $TOKEN" \
+            "${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-defaults/wfruns/${{ steps.tirith.outputs.wfrun-id }}/" \
+            | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["msg"]["Statuses"].keys()))')
+          echo "stages: $STAGES"
+          case "$STAGES" in
+            *tirith-iac-governance*) echo "stage is named tirith-iac-governance" ;;
+            *) echo "expected a tirith-iac-governance stage, got: $STAGES"; exit 1 ;;
+          esac
+
+  # Case 7 — infracost. The plan carries a t3.micro and a db.t3.micro, so a working estimate is a real
+  # number. A zero here means infracost could not price the plan, and a cost policy comparing a
+  # threshold against that zero would pass for the wrong reason.
+  infracost:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: tirith
+        uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
+        with:
+          sg-api-url: ${{ env.SG_API_URL }}
+          sg-dashboard-url: ${{ env.SG_DASH }}
+          step-template-id: ${{ env.SG_STEP_TEMPLATE }}
+          workflow-id: e2e-ntn-infracost
+          comment-tag: infracost
+      - if: always()
+        run: echo "INFRACOST verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }}"
+      - name: the cost estimate must be a real number
+        env:
+          TOKEN: ${{ secrets.SG_API_TOKEN }}
+          BASE: ${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-infracost
+        run: |
+          set -euo pipefail
+          URL=$(curl -sf -H "Authorization: apikey $TOKEN" \
+            "$BASE/wfruns/${{ steps.tirith.outputs.wfrun-id }}/wfrunfacts/default/" \
+            | python3 -c 'import json,sys; m=json.load(sys.stdin).get("msg") or {}; print(m.get("signed_url","") if isinstance(m,dict) else "")')
+          test -n "$URL" || { echo "no facts document"; exit 1; }
+          curl -sf "$URL" -o facts.json
+          python3 - <<'EOF'
+          import json, sys
+          facts = json.load(open("facts.json"))
+          ib = facts.get("InfracostBreakdown") or {}
+          total = ib.get("totalMonthlyCost")
+          print("totalMonthlyCost:", total)
+          for p in ib.get("projects") or []:
+              for r in (p.get("breakdown") or {}).get("resources") or []:
+                  print("   ", r.get("name"), "->", r.get("monthlyCost"))
+          if total is None:
+              sys.exit("no InfracostBreakdown -- infracost did not run, or could not price the plan")
+          if float(total) <= 0:
+              sys.exit("cost is 0 for a plan with a t3.micro and a db.t3.micro -- pricing failed, and a "
+                       "cost policy would pass against this zero for the wrong reason")
+          print("OK: infracost produced a real, non-zero estimate")
+          EOF
