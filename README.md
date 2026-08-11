@@ -18,3 +18,5 @@ really runs `terraform plan`, and the negative cases really fail and are asserte
 one that once shipped in plaintext.
 
 _Triggering the case run._
+
+_Re-run with the step logging fix._
