@@ -154,6 +154,29 @@ jobs:
       - if: always()
         run: echo "STATE verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }}"
 
+      # The step writes the evaluated state to the artifacts directory as tfstate.json, which is the key
+      # the platform reads as a workflow's state document. Fetching it back is the proof it landed.
+      - name: the evaluated state must be published as tfstate.json
+        env:
+          TOKEN: ${{ secrets.SG_API_TOKEN }}
+          BASE: ${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-state
+        run: |
+          set -euo pipefail
+          URL=$(curl -sf -H "Authorization: apikey $TOKEN" "$BASE/get_artifact/?artifactPath=tfstate.json" \
+            | python3 -c 'import json,sys; print((json.load(sys.stdin).get("data") or {}).get("signedUrl",""))')
+          test -n "$URL" || { echo "no tfstate.json artifact"; exit 1; }
+          curl -sf "$URL" -o published.json
+          python3 - <<'EOF'
+          import json, sys
+          d = json.load(open("published.json"))
+          print("version:", d.get("version"), "| resources:", len(d.get("resources") or []))
+          if "hunter2-state-secret" in json.dumps(d):
+              sys.exit("the published state carries a plaintext secret")
+          if "__SG_REDACTED__" not in json.dumps(d):
+              sys.exit("the published state carries no redaction marker -- was it masked?")
+          print("OK: state published at the canonical key, masked")
+          EOF
+
   # Case 4 — the two-phase pipeline. Same workflow-id as the plan job, so the workflow already
   # exists: exactly the shape where ensure_workflow returns 409 and updates nothing. A state document
   # must still route correctly against a workflow the plan phase created.
