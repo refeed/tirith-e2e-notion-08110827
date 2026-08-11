@@ -22,6 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: tirith
+        continue-on-error: true   # the plan violates policy on purpose; the assertion below is the test
         uses: StackGuardian/tirith-iac-governance-action@feat/tirith-policy-check
         with:
           sg-api-url: ${{ env.SG_API_URL }}
@@ -31,6 +32,22 @@ jobs:
           comment-tag: plan
       - if: always()
         run: echo "PLAN verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }} mode=${{ steps.tirith.outputs.mode }}"
+
+      - name: a violated policy must fail the step, and the RUN must still complete
+        env:
+          TOKEN: ${{ secrets.SG_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "${{ steps.tirith.outputs.verdict }}" = "failed" || { echo "expected a failed verdict"; exit 1; }
+          test "${{ steps.tirith.outcome }}" = "failure" || { echo "a failed policy must gate the PR"; exit 1; }
+          # The distinction that matters: the policy failed, the platform did not. Exit 12 keeps the
+          # run COMPLETED so a violation never looks like an outage.
+          STATUS=$(curl -sf -H "Authorization: apikey $TOKEN" \
+            "${{ env.SG_API_URL }}/orgs/${{ env.SG_ORG }}/wfgrps/default/wfs/e2e-ntn-plan/wfruns/${{ steps.tirith.outputs.wfrun-id }}/" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["msg"]["LatestStatus"])')
+          echo "run status: $STATUS"
+          test "$STATUS" = "COMPLETED" || { echo "a policy failure marked the run $STATUS -- it must be COMPLETED"; exit 1; }
+          echo "OK: policy failed, PR gated, run COMPLETED"
 
       # Masking, asserted against the bytes that actually left the runner rather than against a dict
       # in a unit test. plan.json here is BOTH the policy input and a file in the source tree, so the
