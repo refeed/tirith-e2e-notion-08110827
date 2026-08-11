@@ -22,3 +22,5 @@ _Triggering the case run._
 _Re-run with the step logging fix._
 
 _Re-run with the tags_all masking fix._
+
+_Re-run against the step image built from its own repository._
