@@ -30,6 +30,9 @@ jobs:
           step-template-id: ${{ env.SG_STEP_TEMPLATE }}
           workflow-id: e2e-ntn-plan
           comment-tag: plan
+          # Defaults to false, where a failing policy sets a failing check run but exits 0 and the job
+          # stays green. Turning it on is the gating configuration, and the exit-3 path worth testing.
+          fail-on-error: "true"
       - if: always()
         run: echo "PLAN verdict=${{ steps.tirith.outputs.verdict }} run=${{ steps.tirith.outputs.wfrun-id }} mode=${{ steps.tirith.outputs.mode }}"
 
@@ -65,7 +68,7 @@ jobs:
           # workspace HEAD is the merge commit, not the head sha the action names the bundle after --
           # and this is also the documented path a consumer walks: run -> bundlePath -> get_artifact.
           BUNDLE=$(curl -sf -H "Authorization: apikey $TOKEN" "$BASE/wfruns/$RUN_ID/" \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin)["msg"]; print([s for s in d["RuntimeParameters"]["wfStepsConfig"] if s["name"]=="evaluate-policies"][0]["wfStepInputData"]["data"]["bundlePath"])')
+            | python3 -c 'import json,sys; d=json.load(sys.stdin)["msg"]; print(next(s["wfStepInputData"]["data"]["bundlePath"] for s in d["RuntimeParameters"]["wfStepsConfig"] if (s.get("wfStepInputData") or {}).get("data",{}).get("bundlePath")))')
           echo "run $RUN_ID evaluated bundle: $BUNDLE"
           test -n "$BUNDLE" || { echo "the run names no bundle"; exit 1; }
 
