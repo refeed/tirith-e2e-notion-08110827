@@ -60,12 +60,24 @@ jobs:
           mkdir -p unpacked && tar -xzf bundle.tar.gz -C unpacked
           echo "--- bundle contents ---"; find unpacked -type f | sort
 
-          if grep -rq "hunter2-plan-secret" unpacked/; then
-            echo "PLAINTEXT SECRET IN THE BUNDLE:"; grep -rl "hunter2-plan-secret" unpacked/; exit 1
+          # 1. The DOCUMENTS must be masked. plan.json here is also a file in the source tree, so this
+          #    also proves the source walk excluded the unmasked original rather than packing it
+          #    one filename away from the redacted copy.
+          if grep -q "hunter2-plan-secret" unpacked/plan.json; then
+            echo "PLAINTEXT SECRET IN THE MASKED DOCUMENT -- this is a leak"; exit 1
           fi
           grep -q "__SG_REDACTED__" unpacked/plan.json || { echo "plan.json carries no redaction marker"; exit 1; }
+
+          # 2. Committed SOURCE ships as written -- documented, deliberate, and worth pinning so a
+          #    change in either direction is noticed. A secret hardcoded in HCL does reach the
+          #    platform; `source-dir: ""` is the opt-out.
           test -f unpacked/main.tf || { echo "the source was not packed"; exit 1; }
-          echo "OK: bundle retained, no plaintext secret, plan.json masked, source present"
+          grep -q "hunter2-plan-secret" unpacked/main.tf || {
+            echo "main.tf no longer ships its literal -- the documented caveat has changed, update the docs"
+            exit 1
+          }
+
+          echo "OK: documents masked, source shipped verbatim as documented, bundle retained"
 
   # Case 2 — a BINARY plan. `plan-file` renders it through `terraform show -json` in memory, so no
   # unmasked plan JSON is ever written to disk. This is the case a pre-baked plan.json cannot test.
