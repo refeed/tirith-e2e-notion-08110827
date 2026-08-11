@@ -16,3 +16,5 @@ really runs `terraform plan`, and the negative cases really fail and are asserte
 
 `state.json` carries two secrets, one nested inside a `child_module`, because that nested shape is the
 one that once shipped in plaintext.
+
+_Triggering the case run._
